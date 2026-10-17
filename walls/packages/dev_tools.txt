@@ -1,0 +1,17 @@
+gcc
+clang
+rustup
+go
+nodejs
+npm
+python
+python-pip
+gdb
+valgrind
+strace
+lazygit
+ripgrep
+fd
+fzf
+tmux
+zsh

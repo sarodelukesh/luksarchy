@@ -1,0 +1,11 @@
+sway
+swaylock
+swayidle
+waybar
+wofi
+foot
+mako
+wl-clipboard
+grim
+slurp
+xdg-desktop-portal-wlr

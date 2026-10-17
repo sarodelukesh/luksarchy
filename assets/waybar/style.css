@@ -1,0 +1,125 @@
+/* Tokyo Night Colors */
+@define-color bg #1a1b26;
+@define-color bg-alt #24283b;
+@define-color fg #c0caf5;
+@define-color blue #7aa2f7;
+@define-color cyan #7dcfff;
+@define-color purple #bb9af7;
+@define-color red #f7768e;
+@define-color green #9ece6a;
+@define-color border-col #414868;
+
+* {
+  font-family: "JetBrainsMono Nerd Font", monospace;
+  font-size: 12px;
+  font-weight: bold;
+  border: none;
+  border-radius: 0px;
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+}
+
+/* Full Tokyo Night Background across the top */
+window#waybar {
+  background-color: @bg;
+  color: @fg;
+  border-bottom: 1px solid @bg-alt;
+}
+
+/* Base TUI block reset */
+.modules-left, .modules-center, .modules-right {
+  margin: 0;
+  padding: 0;
+}
+
+/* Reset individual widget containers */
+.modules-left > widget,
+.modules-center > widget,
+.modules-right > widget {
+  background-color: transparent;
+  padding: 0;
+  margin: 0;
+}
+
+/* Specific module styling on the right side */
+#cpu,
+#memory,
+#pulseaudio,
+#tray {
+  background-color: @bg-alt;
+  border: 1px solid @border-col;
+  border-radius: 0px;
+  padding: 2px 10px;
+  margin: 3px 3px;
+}
+
+/* Workspaces */
+#workspaces {
+  background-color: transparent;
+  border: none;
+  padding: 0;
+}
+
+#workspaces button {
+  padding: 0 8px;
+  color: @fg;
+  background: transparent;
+  border-radius: 0px;
+}
+
+#workspaces button.active {
+  color: @blue;
+  background-color: @bg-alt;
+}
+
+#workspaces button.urgent {
+  color: @red;
+}
+
+#workspaces button:hover {
+  background-color: @bg-alt;
+  color: @purple;
+}
+
+/* Window Title */
+#window {
+  background-color: transparent;
+  border: none;
+  color: @cyan;
+  padding: 0 10px;
+}
+
+/* Center Clock Block */
+#clock {
+  background-color: @bg-alt;
+  border: 1px solid @border-col;
+  border-radius: 0px;
+  padding: 2px 12px;
+  margin: 3px 0;
+  color: @purple;
+}
+
+/* Right Modules Accent Colors */
+#cpu {
+  color: @blue;
+}
+
+#memory {
+  color: @green;
+}
+
+#pulseaudio {
+  color: @cyan;
+}
+
+#tray {
+  padding: 2px 8px;
+}
+
+/* Fix tray icon crowding */
+#tray > .passive,
+#tray > .active,
+#tray > .needs-attention {
+  padding: 0 4px;
+}
