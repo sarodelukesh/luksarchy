@@ -5,6 +5,6 @@ if [[ $(tty) == "/dev/tty1" ]]; then
     pacman-key --init
     pacman-key --populate archlinux
     clear
-    /usr/local/bin/luksarchy
+    /usr/local/bin/luksarchy-run
     exec /bin/bash
 fi

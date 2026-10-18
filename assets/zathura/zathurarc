@@ -1,0 +1,47 @@
+# Tokyo Night color scheme for Zathura
+# Core palette: BG #1a1b26 | FG #c0caf5 | Accent #7aa2f7
+
+# UI Elements
+set default-bg                  "#1a1b26"
+set default-fg                  "#c0caf5"
+set statusbar-bg                "#16161e"
+set statusbar-fg                "#a9b1d6"
+set inputbar-bg                 "#16161e"
+set inputbar-fg                 "#7aa2f7"
+
+# Notifications
+set notification-bg             "#16161e"
+set notification-fg             "#9ece6a"
+set notification-error-bg       "#16161e"
+set notification-error-fg       "#f7768e"
+set notification-warning-bg     "#16161e"
+set notification-warning-fg     "#e0af68"
+
+# Tab completion
+set completion-bg               "#1f2335"
+set completion-fg               "#a9b1d6"
+set completion-highlight-bg     "#2f334d"
+set completion-highlight-fg     "#7aa2f7"
+set completion-group-bg         "#1f2335"
+set completion-group-fg         "#565f89"
+
+# Highlighting and Selection
+set highlight-color             "#e0af68"
+set highlight-active-color      "#7aa2f7"
+set select-text-bg              "#33467c"
+set select-text-fg              "#c0caf5"
+
+# Index mode (Table of Contents)
+set index-bg                    "#1a1b26"
+set index-fg                    "#c0caf5"
+set index-active-bg             "#2f334d"
+set index-active-fg             "#7aa2f7"
+
+# PDF Recolor (Forces the document background/text to match your theme)
+set recolor                     "true"
+set recolor-lightcolor          "#1a1b26"
+set recolor-darkcolor           "#c0caf5"
+
+# Keep the original hue of images when recoloring is turned on
+set recolor-keephue             "true"
+

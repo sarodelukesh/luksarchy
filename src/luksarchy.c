@@ -14,13 +14,7 @@ static void part_path(char *out, size_t size, const char *disk, int part) {
     }
 }
 
-/* Given a full /dev/... path (e.g. "sda3", "nvme0n1p3"), return the integer part. */
-static int part_number(const char *partpath) {
-    const char *p = partpath;
-    while (*p && !isdigit((unsigned char)*p)) p++;
-    if (!*p) return -1;
-    return atoi(p);
-}
+
 
 enum Terminal_Size {
     TERM_SMALL = 0,
@@ -36,8 +30,8 @@ enum Install_Mode {
 typedef struct {
     enum Install_Mode mode;
     char disk[64];             /* "sda" / "nvme0n1" (no /dev/ prefix) */
-    char free_start[32];       /* e.g. "120MiB" or "120GiB" - only for FREE_SPACE */
-    char free_end[32];         /* e.g. "100%" or "240GiB" - only for FREE_SPACE */
+    char free_start[32];       /* raw 512-byte sector number - only for FREE_SPACE */
+    char free_end[32];         /* raw 512-byte sector number - only for FREE_SPACE */
     int  reuse_efi;            /* 1 if using existing ESP (FREE_SPACE w/ UEFI) */
     char efi_part[64];         /* e.g. "/dev/sda1" or "/dev/nvme0n1p1" */
     char root_part[64];        /* filled in by partition_disk() */
@@ -65,9 +59,9 @@ static const char *HYPRLAND_PACKAGES =
     "pipewire pipewire-pulse pipewire-alsa wireplumber "
     "pavucontrol alsa-utils "
     "firefox alacritty thunar thunar-archive-plugin file-roller "
-    "vlc evince eog "
+    "mpv yt-dlp zathura zathura-pdf-poppler eog "
     "fastfetch rofi-wayland ripgrep fd "
-    "ttf-iosevka-nerd ttf-jetbrains-mono-nerd "
+    "ttf-jetbrains-mono-nerd "
     "polkit-gnome qt5-wayland qt6-wayland "
     "grim slurp wl-clipboard brightnessctl playerctl "
     "noto-fonts noto-fonts-emoji";
@@ -298,20 +292,28 @@ int setup_systemd_override(const Systemd_Override *override) {
     return 1;
 }
 
+static int raw_mode_active = 0;
+
 static void disable_raw_mode(void) {
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+    if (raw_mode_active) {
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+        raw_mode_active = 0;
+    }
 }
 
 static void enable_raw_mode(void) {
+    if (raw_mode_active) return;   /* already enabled; don't re-register atexit */
+
     tcgetattr(STDIN_FILENO, &orig_termios);
-    atexit(disable_raw_mode);
+    atexit(disable_raw_mode);     /* registered exactly once */
 
     struct termios raw = orig_termios;
     raw.c_lflag &= ~(ECHO | ICANON);
-    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VMIN]  = 1;
     raw.c_cc[VTIME] = 0;
 
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+    raw_mode_active = 1;
 }
 
 static void get_terminal_size(int *rows, int *cols) {
@@ -329,8 +331,17 @@ static enum Terminal_Size get_terminal_size_category(int cols) {
 
 static int get_logo_width(int cols) {
     enum Terminal_Size size = get_terminal_size_category(cols);
-    if (size == TERM_LARGE) return 72;
-    if (size == TERM_MEDIUM) return 28;
+    /*
+     * Block-drawing chars (█ etc.) are double-width in most terminals
+     * (wcwidth == 2).  Measure the widest line in display columns, not
+     * byte/codepoint count.
+     *
+     * Large logo: widest line is 69 Unicode chars, all double-width → 138 cols.
+     * Medium logo: ASCII-range box chars, single-width → 31 cols.
+     * Small logo: "LUKSARCHY" → 9 cols.
+     */
+    if (size == TERM_LARGE)  return 138;
+    if (size == TERM_MEDIUM) return 31;
     return 9;
 }
 
@@ -354,7 +365,7 @@ static void clear_screen(void) {
 
 static void draw_logo(int cols) {
     const char *logo_large[] = {
-        "████     ███   ████  ██████████ ██████ ███████  ████████  ████   ███",
+        "███     ███   ████  ██████████ ██████ ███████  ████████  ████   ███",
         "███     ███   ████ ██▀████▀▀▀▀▀████▀▀██▄██▀▀██▄██▀▀▀▀██  ███▄▄███ ███▀",
         "███     ███   ██████▀ ██████▄ █████████████▄█████████▀ ▐██████▀ ▀███▄ ",
         "███     ███   ████▀██▄ ▀▀▀▀██ ███▀▀██ ███▀▀██ ███     ██▀▀██▄  ▀██▄  ",
@@ -375,27 +386,30 @@ static void draw_logo(int cols) {
     enum Terminal_Size size = get_terminal_size_category(cols);
     const char **logo;
     int logo_height;
-    int logo_width;
 
     switch (size) {
         case TERM_LARGE:
             logo = logo_large;
             logo_height = 6;
-            logo_width = 72;
             break;
         case TERM_MEDIUM:
             logo = logo_medium;
             logo_height = 3;
-            logo_width = 28;
             break;
         default:
             logo = logo_small;
             logo_height = 1;
-            logo_width = 9;
             break;
     }
 
-    int logo_start = (cols - logo_width) / 2;
+    /*
+     * logo_width here is in *display columns* (double-width chars already
+     * accounted for in get_logo_width).  If the terminal is narrower than
+     * the logo just start at column 1 — the logo will wrap but at least it
+     * won't appear off-centre to the right.
+     */
+    int display_width = get_logo_width(cols);
+    int logo_start = (cols > display_width) ? (cols - display_width) / 2 : 1;
     if (logo_start < 1) logo_start = 1;
 
     printf("\033[1;32m");
@@ -439,23 +453,40 @@ static int select_from_menu(const char **items, int count) {
 
     char c;
     while (read(STDIN_FILENO, &c, 1) == 1) {
-        if (c == 'q' || c == 27) {
+        if (c == 27) {
+            /* Read the rest of a possible escape sequence ("\033[A" / "\033[B"). */
+            char seq[2] = {0, 0};
+            if (read(STDIN_FILENO, &seq[0], 1) == 1 && seq[0] == '[') {
+                read(STDIN_FILENO, &seq[1], 1);
+                if (seq[1] == 'B') goto move_down;   /* arrow down */
+                if (seq[1] == 'A') goto move_up;     /* arrow up   */
+            }
+            /* Bare ESC = quit */
             disable_raw_mode();
             return -1;
         }
 
-        if (c == 'j' || c == 66) {
+        if (c == 'q') {
+            disable_raw_mode();
+            return -1;
+        }
+
+        if (c == 'j') {
+move_down:
             if (selected < count - 1) {
                 selected++;
                 draw_menu(items, count, selected);
             }
+            continue;
         }
 
-        if (c == 'k' || c == 65) {
+        if (c == 'k') {
+move_up:
             if (selected > 0) {
                 selected--;
                 draw_menu(items, count, selected);
             }
+            continue;
         }
 
         if (c == '\r' || c == '\n') {
@@ -574,7 +605,8 @@ static int read_line(char *buf, int size, int echo) {
     return result;
 }
 
-static int fzf_select(char *dest, const char *cmd, const char *default_val) {
+/* dest must be at least 256 bytes (matches the callers' 256-byte arrays). */
+static int fzf_select(char *dest, size_t dest_size, const char *cmd, const char *default_val) {
     clear_screen();
     FILE *fp = popen(cmd, "r");
     if (fp == NULL)
@@ -583,13 +615,13 @@ static int fzf_select(char *dest, const char *cmd, const char *default_val) {
     char buf[256];
     if (fgets(buf, sizeof(buf), fp) != NULL) {
         buf[strcspn(buf, "\n")] = '\0';
-        if (strlen(buf) > 0)
-            strcpy(dest, buf);
+        if (buf[0] != '\0')
+            snprintf(dest, dest_size, "%s", buf);
     }
     pclose(fp);
 
-    if (strlen(dest) == 0 && default_val)
-        strcpy(dest, default_val);
+    if (dest[0] == '\0' && default_val)
+        snprintf(dest, dest_size, "%s", default_val);
 
     return 1;
 }
@@ -618,7 +650,7 @@ static int handle_password_entry(
         return 0;
     }
 
-    strcpy(password, temp_input);
+    snprintf(password, 256, "%s", temp_input);
 
     draw_form(username, password, confirmed_password, hostname, keyboard, timezone, 2);
     printf(ANSI_CURSOR_POS, form_row + 2, logo_start + 20);
@@ -628,7 +660,7 @@ static int handle_password_entry(
         return -1;
 
     if (strcmp(password, password_confirm) == 0) {
-        strcpy(confirmed_password, password_confirm);
+        snprintf(confirmed_password, 256, "%s", password_confirm);
         return 1;
     } else {
         show_message("Passwords do not match");
@@ -666,12 +698,12 @@ static int get_form_input(
         Form_Field *f = &fields[current_field];
 
         if (f->type == INPUT_FZF_KEYMAP) {
-            fzf_select(keyboard,
+            fzf_select(keyboard, 256,
                 "localectl list-keymaps | fzf --height=40% --reverse --prompt='Keyboard: ' "
                 "--header='Start typing to filter, Enter to select' --query='us'", "us");
             current_field++;
         } else if (f->type == INPUT_FZF_TIMEZONE) {
-            fzf_select(timezone,
+            fzf_select(timezone, 256,
                 "timedatectl list-timezones | fzf --height=40% --reverse --prompt='Timezone: ' "
                 "--header='Type your city/timezone, Enter to select'", NULL);
             if (strlen(timezone) == 0) {
@@ -703,11 +735,11 @@ static int get_form_input(
 
             if (strlen(temp_input) == 0) {
                 if (f->default_val) {
-                    strcpy(f->dest, f->default_val);
+                    snprintf(f->dest, 256, "%s", f->default_val);
                     current_field++;
                 }
             } else if (validate_alphanumeric(temp_input)) {
-                strcpy(f->dest, temp_input);
+                snprintf(f->dest, 256, "%s", temp_input);
                 current_field++;
             } else {
                 show_message(f->error_msg);
@@ -743,11 +775,11 @@ static int get_form_input(
                 Form_Field *f = &fields[edit_field];
 
                 if (f->type == INPUT_FZF_KEYMAP) {
-                    fzf_select(keyboard,
+                    fzf_select(keyboard, 256,
                         "localectl list-keymaps | fzf --height=40% --reverse --prompt='Keyboard: ' "
                         "--header='Start typing to filter, Enter to select' --query='us'", "us");
                 } else if (f->type == INPUT_FZF_TIMEZONE) {
-                    fzf_select(timezone,
+                    fzf_select(timezone, 256,
                         "timedatectl list-timezones | fzf --height=40% --reverse --prompt='Timezone: ' "
                         "--header='Type your city/timezone, Enter to select'", NULL);
                     if (strlen(timezone) == 0)
@@ -764,10 +796,10 @@ static int get_form_input(
 
                     if (read_line(temp_input, sizeof(temp_input), 1)) {
                         if (strlen(temp_input) == 0 && f->default_val) {
-                            strcpy(f->dest, f->default_val);
+                            snprintf(f->dest, 256, "%s", f->default_val);
                         } else if (strlen(temp_input) > 0) {
                             if (validate_alphanumeric(temp_input))
-                                strcpy(f->dest, temp_input);
+                                snprintf(f->dest, 256, "%s", temp_input);
                             else
                                 show_message(f->error_msg);
                         }
@@ -825,7 +857,7 @@ static int select_disk(char *disk_name) {
         return 0;
     }
 
-    strcpy(disk_name, names[selected]);
+    snprintf(disk_name, 64, "%s", names[selected]);
     return 1;
 }
 
@@ -848,67 +880,109 @@ static int select_install_mode(void) {
  * Output format from parted -ms:  "<num>:<start>:<end>:<size>:free;<fs>;"
  * We print "<start>:<end>" (units as reported by parted, typically MiB/GiB or %).
  */
+/*
+ * list_free_space() - find free regions on /dev/<disk>.
+ *
+ * Works entirely in 512-byte sectors to avoid any unit-suffix ambiguity.
+ * Parses sgdisk -p output for partition table + the "First usable sector"
+ * and "Last usable sector" lines, so gaps never overlap the GPT header,
+ * partition entries, or backup GPT at the disk's end.
+ *
+ * Returns region strings as "startSector:endSector" (raw 512-byte sectors).
+ */
 static int list_free_space(const char *disk, char regions[][128], int max_regions) {
     char cmd[512];
+    int count = 0;
+    unsigned long long first_usable = 34;   /* conservative GPT default */
+    unsigned long long last_usable  = 0;
+
+    /* First pass: parse "First usable sector" and "Last usable sector" from sgdisk -p. */
+    snprintf(cmd, sizeof(cmd), "sgdisk -p /dev/%s 2>/dev/null", disk);
+    {
+        FILE *fp = popen(cmd, "r");
+        if (!fp) {
+            LOG_ERROR("list_free_space: sgdisk -p failed for /dev/%s", disk);
+            return 0;
+        }
+        char line[256];
+        while (fgets(line, sizeof(line), fp) != NULL) {
+            unsigned long long val;
+            if (sscanf(line, " First usable sector: %llu", &val) == 1)
+                first_usable = val;
+            else if (sscanf(line, " Last usable sector: %llu", &val) == 1)
+                last_usable = val;
+        }
+        pclose(fp);
+    }
+
+    /* Fallback: if sgdisk didn't report usable range, use blockdev size minus backup GPT. */
+    if (last_usable == 0) {
+        snprintf(cmd, sizeof(cmd), "blockdev --getsz /dev/%s 2>/dev/null", disk);
+        FILE *fp2 = popen(cmd, "r");
+        if (fp2) {
+            char buf[64] = "";
+            if (fgets(buf, sizeof(buf), fp2) != NULL) {
+                unsigned long long total = strtoull(buf, NULL, 10);
+                /* Reserve 33 sectors for backup GPT + 1 for alignment. */
+                last_usable = (total > 34) ? total - 34 : 0;
+            }
+            pclose(fp2);
+        }
+    }
+
+    char line[256];
+    unsigned long long prev_end = first_usable - 1;
+
+    /* Second pass: list partitions and compute gaps. */
     snprintf(cmd, sizeof(cmd),
-        "parted -s -m /dev/%s unit MiB print free 2>/dev/null | "
-        "awk -F: '$5==\"free\" {print $2 \":\" $3}'", disk);
+        "sgdisk -p /dev/%s 2>/dev/null | awk 'NF>=3 && $1 ~ /^[0-9]+$/ { print $2, $3 }'", disk);
 
     FILE *fp = popen(cmd, "r");
-    if (!fp) return 0;
+    if (!fp) {
+        LOG_ERROR("list_free_space: sgdisk -p failed for /dev/%s", disk);
+        return 0;
+    }
 
-    int count = 0;
-    char line[256];
     while (count < max_regions && fgets(line, sizeof(line), fp) != NULL) {
-        line[strcspn(line, "\n")] = '\0';
-        if (strlen(line) == 0) continue;
-
-        /* Skip zero-length regions */
-        char *colon = strchr(line, ':');
-        if (!colon) continue;
-
-        snprintf(regions[count], sizeof(regions[count]), "%s", line);
-        count++;
+        unsigned long long start = 0, end = 0;
+        if (sscanf(line, "%llu %llu", &start, &end) == 2) {
+            /* Free gap between prev_end+1 and start-1. */
+            if (start > prev_end + 1) {
+                unsigned long long gap_start = prev_end + 1;
+                unsigned long long gap_end   = start - 1;
+                if (gap_start < first_usable) gap_start = first_usable;
+                if (gap_end > last_usable)    gap_end   = last_usable;
+                if (gap_end > gap_start && (gap_end - gap_start) >= 4096) {
+                    snprintf(regions[count], sizeof(regions[count]), "%llu:%llu",
+                             gap_start, gap_end);
+                    count++;
+                }
+            }
+            if (end > prev_end) prev_end = end;
+        }
     }
     pclose(fp);
+
+    /* Free space from after the last partition to the last usable sector. */
+    {
+        if (count < max_regions && last_usable > prev_end + 1) {
+            unsigned long long gap_start = prev_end + 1;
+            unsigned long long gap_end   = last_usable;
+            if (gap_start < first_usable) gap_start = first_usable;
+            if (gap_end > gap_start && (gap_end - gap_start) >= 4096) { /* >= 2 MiB */
+                snprintf(regions[count], sizeof(regions[count]), "%llu:%llu",
+                         gap_start, gap_end);
+                count++;
+            }
+        }
+    }
+
+    LOG_INFO("list_free_space: found %d free region(s) on /dev/%s (usable %llu..%llu)",
+             count, disk, first_usable, last_usable);
     return count;
 }
 
-/*
- * Find the partition path that occupies [start,end] on the given disk.
- * After sgdisk --new=<n>:<start>:<end> the new partition is the one whose
- * range matches what we asked for; we ask lsblk for all partition start
- * offsets and pick the closest match.
- */
-static int find_new_partition(const char *disk, const char *start_str, char *out, size_t out_size) {
-    /* Strip "MiB" suffix if present */
-    char start_num[32];
-    snprintf(start_num, sizeof(start_num), "%s", start_str);
-    char *p = strstr(start_num, "MiB");
-    if (p) *p = '\0';
-    if (strstr(start_num, "GiB")) *strstr(start_num, "GiB") = '\0';
-    if (strchr(start_num, '%')) return 0; /* can't match % - ask sgdisk */
 
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd),
-        "lsblk -b -n -o NAME,START /dev/%s 2>/dev/null | tail -n +2 | "
-        "sort -k2 -n | tail -n 1 | awk '{print $1}'", disk);
-
-    FILE *fp = popen(cmd, "r");
-    if (!fp) return 0;
-
-    char name[64] = "";
-    if (fgets(name, sizeof(name), fp) != NULL) {
-        name[strcspn(name, "\n")] = '\0';
-    }
-    pclose(fp);
-
-    if (strlen(name) == 0) return 0;
-
-    snprintf(out, out_size, "/dev/%s", name);
-    LOG_INFO("find_new_partition: chose %s (start=%s)", out, start_str);
-    return 1;
-}
 
 /*
  * Detect an existing EFI System Partition on the given disk.
@@ -947,6 +1021,16 @@ static int detect_esp(const char *disk, char *esp_out, size_t esp_out_size) {
  *   - Reuse existing ESP if UEFI and detect_esp() found one
  *   - Put swap in a swapfile on the root (avoids needing a 2nd region)
  */
+/*
+ * partition_disk_free_space() - non-destructive alongside-install.
+ *
+ *   - Do NOT wipefs, do NOT zap-all
+ *   - Create one new root partition inside the chosen free region
+ *   - Reuse existing ESP if UEFI and detect_esp() found one
+ *   - Put swap in a swapfile on the root (avoids needing a 2nd region)
+ *
+ * plan->free_start / free_end are raw 512-byte sector numbers (e.g. "2048:41943006").
+ */
 static int partition_disk_free_space(Partition_Plan *plan) {
     char cmd[2048];
     int rows, cols;
@@ -961,63 +1045,158 @@ static int partition_disk_free_space(Partition_Plan *plan) {
            10, logo_start, plan->disk);
     fflush(stdout);
 
-    /* Sanity: refuse if free region is trivially small (< 15 GiB). */
-    {
-        char *colon = strchr(plan->free_start, ':');
-        if (!colon) {
-            show_message("Malformed free region");
-            return 0;
-        }
-        /* We trust parted's units (MiB). Parse numeric part. */
-        double s = atof(plan->free_start);
-        double e = atof(colon + 1);
-        if (e - s < 15000.0) {
-            show_message("Free space < 15 GiB, refusing alongside install");
-            return 0;
+    unsigned long long free_s = strtoull(plan->free_start, NULL, 10);
+    unsigned long long free_e = strtoull(plan->free_end,   NULL, 10);
+
+    /* Sanity: refuse if free region is < 15 GiB.
+     * 15 GiB = 15 * 1024 * 2048 = 31457280 sectors (512-byte). */
+    if (free_e - free_s < 31457280ULL) {
+        show_message("Free space < 15 GiB, refusing alongside install");
+        return 0;
+    }
+
+    /*
+     * Bootloader partition handling:
+     *
+     * UEFI + no existing ESP: carve a 512 MiB ESP (ef00) from the start of
+     *   the free region.  root starts immediately after.
+     *
+     * BIOS + GPT: GRUB's i386-pc target requires a BIOS Boot Partition (ef02,
+     *   1 MiB) to embed its core image — without one it refuses to install.
+     *   Carve it from the start of the free region before root.
+     *
+     * UEFI + existing ESP / BIOS + MBR: nothing extra needed here.
+     */
+    unsigned long long root_s = free_s;   /* start sector for root partition */
+
+    if (!uefi) {
+        /*
+         * BIOS systems: check if the disk uses GPT.  If so we need a BIOS
+         * Boot Partition.  MBR disks embed GRUB in the MBR gap — no extra
+         * partition required.
+         */
+        char gpt_check[512];
+        snprintf(gpt_check, sizeof(gpt_check),
+            "sgdisk -p /dev/%s 2>/dev/null | grep -q 'GPT'", plan->disk);
+        int is_gpt = (system(gpt_check) == 0);
+
+        if (is_gpt) {
+            /* 1 MiB BIOS Boot Partition: 2048 sectors of 512 bytes */
+            unsigned long long bbp_end = free_s + 2047ULL;
+            if (bbp_end >= free_e) {
+                show_message("Free region too small to fit BIOS Boot Partition + root");
+                return 0;
+            }
+            LOG_INFO("GPT + BIOS: creating 1 MiB BIOS Boot Partition (ef02)");
+            snprintf(cmd, sizeof(cmd),
+                "sgdisk --new=0:%llu:%llu --typecode=0:ef02 --change-name=0:BIOS /dev/%s 2>> %s",
+                free_s, bbp_end, plan->disk, LOG_PATH);
+            if (system(cmd) != 0) {
+                LOG_ERROR("sgdisk --new BIOS Boot Partition failed on /dev/%s", plan->disk);
+                show_message("Failed to create BIOS Boot Partition");
+                return 0;
+            }
+            system("partprobe 2>/dev/null || true");
+            sleep(1);
+            root_s = bbp_end + 1;
+            LOG_INFO("BIOS Boot Partition created; root will start at sector %llu", root_s);
         }
     }
 
-    /* Create new root partition in the free region.
-     * sgdisk --new=<idx>:<start>:<end>; idx=0 means "use next free number". */
+    if (uefi && !plan->reuse_efi) {
+        /* 512 MiB ESP: sectors [free_s, free_s + 1048575] */
+        unsigned long long esp_end = free_s + 1048575ULL;
+        if (esp_end >= free_e) {
+            show_message("Free region too small to fit ESP + root");
+            return 0;
+        }
+
+        LOG_INFO("No existing ESP — creating new 512 MiB ESP in free region");
+        snprintf(cmd, sizeof(cmd),
+            "sgdisk --new=0:%llu:%llu --typecode=0:ef00 --change-name=0:EFI /dev/%s 2>> %s",
+            free_s, esp_end, plan->disk, LOG_PATH);
+        if (system(cmd) != 0) {
+            LOG_ERROR("sgdisk --new ESP failed on /dev/%s", plan->disk);
+            show_message("Failed to create EFI partition");
+            return 0;
+        }
+
+        /* Re-read so the kernel sees the new ESP before we query its number. */
+        system("partprobe 2>/dev/null || true");
+        sleep(1);
+
+        /* Find the partition number we just created (highest number). */
+        {
+            char q[512];
+            snprintf(q, sizeof(q),
+                "sgdisk -p /dev/%s 2>/dev/null"
+                " | awk 'NF>=3 && $1 ~ /^[0-9]+$/ { print $1 }'"
+                " | sort -n | tail -1",
+                plan->disk);
+            FILE *fp = popen(q, "r");
+            if (!fp) { show_message("Failed to query ESP partition number"); return 0; }
+            char nbuf[16] = "";
+            if (fgets(nbuf, sizeof(nbuf), fp) != NULL)
+                nbuf[strcspn(nbuf, "\n")] = '\0';
+            pclose(fp);
+            if (strlen(nbuf) == 0) {
+                show_message("Could not determine ESP partition number");
+                return 0;
+            }
+            part_path(plan->efi_part, sizeof(plan->efi_part), plan->disk, atoi(nbuf));
+        }
+        LOG_INFO("New ESP partition: %s", plan->efi_part);
+
+        /* Format the new ESP. */
+        snprintf(cmd, sizeof(cmd), "mkfs.fat -F32 %s 2>> %s", plan->efi_part, LOG_PATH);
+        if (system(cmd) != 0) {
+            LOG_ERROR("mkfs.fat failed on %s", plan->efi_part);
+            show_message("Failed to format EFI partition");
+            return 0;
+        }
+
+        plan->reuse_efi = 0;   /* fresh ESP — install_bootloader will use bootctl/grub fresh */
+        root_s = esp_end + 1;  /* root starts right after the ESP */
+    }
+
+    /* Create root partition from root_s to free_e. */
     snprintf(cmd, sizeof(cmd),
-        "sgdisk --new=0:%s:%s --typecode=0:8300 /dev/%s 2>> %s",
-        plan->free_start, plan->free_end, plan->disk, LOG_PATH);
+        "sgdisk --new=0:%llu:%llu --typecode=0:8300 /dev/%s 2>> %s",
+        root_s, free_e, plan->disk, LOG_PATH);
     if (system(cmd) != 0) {
-        LOG_ERROR("sgdisk --new failed on /dev/%s", plan->disk);
+        LOG_ERROR("sgdisk --new root failed on /dev/%s (start=%llu end=%llu)",
+                  plan->disk, root_s, free_e);
         show_message("Failed to create root partition");
         return 0;
     }
 
-    /* Re-read partition table */
+    /* Re-read partition table. */
     system("partprobe 2>/dev/null || true");
     sleep(1);
 
-    /* Figure out which partition number we just created. We ask sgdisk for
-     * the highest partition number; that's almost always ours. */
+    /* Figure out which partition number we just created — the highest one. */
     {
         char q[512];
         snprintf(q, sizeof(q),
-            "sgdisk -p /dev/%s 2>/dev/null | awk '/^Number/{getline;print $1}' | sort -n | tail -1",
+            "sgdisk -p /dev/%s 2>/dev/null"
+            " | awk 'NF>=3 && $1 ~ /^[0-9]+$/ { print $1 }'"
+            " | sort -n | tail -1",
             plan->disk);
         FILE *fp = popen(q, "r");
-        if (!fp) {
-            show_message("Failed to query new partition number");
-            return 0;
-        }
+        if (!fp) { show_message("Failed to query root partition number"); return 0; }
         char numbuf[16] = "";
         if (fgets(numbuf, sizeof(numbuf), fp) != NULL)
             numbuf[strcspn(numbuf, "\n")] = '\0';
         pclose(fp);
         if (strlen(numbuf) == 0) {
-            show_message("Could not determine new partition number");
+            show_message("Could not determine root partition number");
             return 0;
         }
-        int idx = atoi(numbuf);
-        part_path(plan->root_part, sizeof(plan->root_part), plan->disk, idx);
+        part_path(plan->root_part, sizeof(plan->root_part), plan->disk, atoi(numbuf));
     }
     LOG_INFO("New root partition: %s", plan->root_part);
 
-    /* mkfs.ext4 on the new root (only new partition we touch) */
+    /* mkfs.ext4 on the new root partition. */
     snprintf(cmd, sizeof(cmd), "mkfs.ext4 -F %s 2>> %s", plan->root_part, LOG_PATH);
     if (system(cmd) != 0) {
         LOG_ERROR("mkfs.ext4 failed on %s", plan->root_part);
@@ -1025,7 +1204,7 @@ static int partition_disk_free_space(Partition_Plan *plan) {
         return 0;
     }
 
-    /* Mount root */
+    /* Mount root at /mnt. */
     snprintf(cmd, sizeof(cmd), "mount %s /mnt 2>> %s", plan->root_part, LOG_PATH);
     if (system(cmd) != 0) {
         LOG_ERROR("mount %s /mnt failed", plan->root_part);
@@ -1033,23 +1212,16 @@ static int partition_disk_free_space(Partition_Plan *plan) {
         return 0;
     }
 
-    /* EFI: reuse existing ESP if we found one, else create a new one.
-     * If no existing ESP and no free space for one, we fail (BIOS-in-UEFI
-     * mode alongside is not supported here). */
+    /* Mount ESP at /mnt/boot (reused or freshly created). */
     if (uefi) {
-        if (plan->reuse_efi && plan->efi_part[0]) {
-            LOG_INFO("Reusing existing ESP: %s", plan->efi_part);
-            system("mkdir -p /mnt/boot 2>> " LOG_PATH);
-            snprintf(cmd, sizeof(cmd), "mount %s /mnt/boot 2>> %s", plan->efi_part, LOG_PATH);
-            if (system(cmd) != 0) {
-                LOG_ERROR("Failed to mount existing ESP %s", plan->efi_part);
-                show_message("Failed to mount existing ESP");
-                return 0;
-            }
-        } else {
-            show_message("No existing ESP found. Whole-disk install required for UEFI.");
+        system("mkdir -p /mnt/boot 2>> " LOG_PATH);
+        snprintf(cmd, sizeof(cmd), "mount %s /mnt/boot 2>> %s", plan->efi_part, LOG_PATH);
+        if (system(cmd) != 0) {
+            LOG_ERROR("Failed to mount ESP %s at /mnt/boot", plan->efi_part);
+            show_message("Failed to mount EFI partition");
             return 0;
         }
+        LOG_INFO("ESP %s mounted at /mnt/boot", plan->efi_part);
     }
 
     show_message("Disk prepared successfully (alongside)!");
@@ -1232,6 +1404,23 @@ static int install_packages_impl(const char *package_list) {
     LOG_INFO("Starting offline package installation");
     LOG_INFO("Packages: %s", package_list);
 
+    /* Pre-flight checks so we fail fast with a clear message. */
+    if (stat("/usr/bin/pacstrap", &(struct stat){0}) != 0) {
+        LOG_ERROR("pacstrap not found at /usr/bin/pacstrap");
+        show_message("pacstrap not found in live environment");
+        return 0;
+    }
+    if (stat("/repo", &(struct stat){0}) != 0) {
+        LOG_ERROR("/repo not found - local package repository missing");
+        show_message("Package repository /repo not found");
+        return 0;
+    }
+    if (stat("/mnt", &(struct stat){0}) != 0) {
+        LOG_ERROR("/mnt not found - root partition not mounted");
+        show_message("Root partition not mounted at /mnt");
+        return 0;
+    }
+
     char cmd[8192];
     snprintf(cmd, sizeof(cmd),
         "pacstrap -C /etc/pacman.conf -G /mnt %s 2>> %s",
@@ -1239,8 +1428,8 @@ static int install_packages_impl(const char *package_list) {
 
     int result = system(cmd);
     if (result != 0) {
-        LOG_ERROR("pacstrap failed with exit code %d", result);
-        show_message("Failed to install packages");
+        LOG_ERROR("pacstrap failed with exit code %d — see %s for details", result, LOG_PATH);
+        show_message("Failed to install packages (see log)");
         return 0;
     }
 
@@ -1630,6 +1819,11 @@ static int setup_common_configs(const char *username) {
     system(cmd);
 
     snprintf(cmd, sizeof(cmd),
+        "cp -r /usr/share/luksarchy/zathura /mnt/home/%s/.config/zathura 2>/dev/null || true",
+        username);
+    system(cmd);
+
+    snprintf(cmd, sizeof(cmd),
         "arch-chroot /mnt chown -R %s:%s /home/%s/.config",
         username, username, username);
     system(cmd);
@@ -1823,22 +2017,36 @@ int main(void) {
             logger_close();
             return 1;
         }
+
+        /* Build human-readable labels: "Free space detected: X.X GB on /dev/<disk>" */
+        char labels[32][128];
         const char *ptrs[32];
-        for (int i = 0; i < n; i++) ptrs[i] = regions[i];
+        for (int i = 0; i < n; i++) {
+            unsigned long long s = 0, e = 0;
+            sscanf(regions[i], "%llu:%llu", &s, &e);
+            /* sectors are 512 bytes; convert to GiB */
+            double gib = (double)(e - s) * 512.0 / (1024.0 * 1024.0 * 1024.0);
+            snprintf(labels[i], sizeof(labels[i]),
+                     "Free space detected: %.1f GB on /dev/%s",
+                     gib, plan.disk);
+            ptrs[i] = labels[i];
+        }
+
         int sel = select_from_menu(ptrs, n);
         if (sel < 0) {
             logger_close();
             return 1;
         }
-        char *colon = strchr(regions[sel], ':');
-        if (!colon) {
+
+        /* Parse start/end back from the untouched regions[] entry. */
+        unsigned long long sel_s = 0, sel_e = 0;
+        if (sscanf(regions[sel], "%llu:%llu", &sel_s, &sel_e) != 2) {
             show_message("Malformed free region");
             logger_close();
             return 1;
         }
-        *colon = '\0';
-        snprintf(plan.free_start, sizeof(plan.free_start), "%s", regions[sel]);
-        snprintf(plan.free_end,   sizeof(plan.free_end),   "%s", colon + 1);
+        snprintf(plan.free_start, sizeof(plan.free_start), "%llu", sel_s);
+        snprintf(plan.free_end,   sizeof(plan.free_end),   "%llu", sel_e);
 
         if (is_uefi_system()) {
             char esp[64];

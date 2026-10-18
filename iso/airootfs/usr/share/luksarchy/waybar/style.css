@@ -1,125 +1,156 @@
-/* Tokyo Night Colors */
-@define-color bg #1a1b26;
-@define-color bg-alt #24283b;
-@define-color fg #c0caf5;
-@define-color blue #7aa2f7;
-@define-color cyan #7dcfff;
-@define-color purple #bb9af7;
-@define-color red #f7768e;
-@define-color green #9ece6a;
-@define-color border-col #414868;
-
 * {
-  font-family: "JetBrainsMono Nerd Font", monospace;
-  font-size: 12px;
-  font-weight: bold;
-  border: none;
-  border-radius: 0px;
-  margin: 0;
-  padding: 0;
+  font-family: JetbrainsMono Nerd Font;
+  font-size: 10px;
   min-height: 0;
+  padding-right: 2px;
+  padding-left: 2px;
+  padding-bottom: 0px;
 }
 
-/* Full Tokyo Night Background across the top */
-window#waybar {
-  background-color: @bg;
-  color: @fg;
-  border-bottom: 1px solid @bg-alt;
+#waybar {
+  background: transparent;
+  color: #c6d0f5;
+  margin: 2px 2px;
 }
 
-/* Base TUI block reset */
-.modules-left, .modules-center, .modules-right {
-  margin: 0;
-  padding: 0;
-}
-
-/* Reset individual widget containers */
-.modules-left > widget,
-.modules-center > widget,
-.modules-right > widget {
-  background-color: transparent;
-  padding: 0;
-  margin: 0;
-}
-
-/* Specific module styling on the right side */
-#cpu,
-#memory,
-#pulseaudio,
-#tray {
-  background-color: @bg-alt;
-  border: 1px solid @border-col;
-  border-radius: 0px;
-  padding: 2px 10px;
-  margin: 3px 3px;
-}
-
-/* Workspaces */
 #workspaces {
-  background-color: transparent;
-  border: none;
-  padding: 0;
+  border-radius: 5px;
+  margin: 5px;
+  background: #101010;
+  margin-left: 2px;
 }
 
 #workspaces button {
-  padding: 0 8px;
-  color: @fg;
-  background: transparent;
-  border-radius: 0px;
+  color: #babbf1;
+  border-radius: 5px;
+  padding: 0.4rem;
 }
 
 #workspaces button.active {
-  color: @blue;
-  background-color: @bg-alt;
+  color: #99d1db;
+  border-radius: 5px;
 }
 
-#workspaces button.urgent {
-  color: @red;
+button {
+  background: transparent;
 }
 
 #workspaces button:hover {
-  background-color: @bg-alt;
-  color: @purple;
+  background: #1e1e1e;
+  border: 0px solid transparent;
 }
 
-/* Window Title */
-#window {
-  background-color: transparent;
-  border: none;
-  color: @cyan;
-  padding: 0 10px;
+#custom-music,
+#tray,
+#backlight,
+#clock,
+#battery,
+#pulseaudio,
+#network,
+#cpu,
+#memory,
+#custom-lock,
+#custom-power,
+#custom-weather,
+#custom-uptime,
+#custom-docker {
+  background-color: #101010;
+  padding: 0.5rem 1rem;
+  margin: 5px 0;
 }
 
-/* Center Clock Block */
 #clock {
-  background-color: @bg-alt;
-  border: 1px solid @border-col;
-  border-radius: 0px;
-  padding: 2px 12px;
-  margin: 3px 0;
-  color: @purple;
+  color: #8caaee;
+  border-radius: 5px;
 }
 
-/* Right Modules Accent Colors */
-#cpu {
-  color: @blue;
+#custom-weather {
+  color: #8caaee;
+  margin-left: 0.5rem;
+  border-radius: 5px;
 }
 
-#memory {
-  color: @green;
+#battery {
+  color: #a6d189;
+}
+
+#battery.charging {
+  color: #a6d189;
+}
+
+#battery.warning:not(.charging) {
+  color: #e78284;
+}
+
+#backlight {
+  color: #e5c890;
+}
+
+#backlight,
+#battery {
+  border-radius: 0;
 }
 
 #pulseaudio {
-  color: @cyan;
+  color: #ea999c;
+  border-radius: 5px 0px 0px 5px;
 }
 
-#tray {
-  padding: 2px 8px;
+#custom-docker {
+  color: #85c1dc;
 }
 
-/* Fix tray icon crowding */
-#tray > .passive,
-#tray > .active,
-#tray > .needs-attention {
-  padding: 0 4px;
+#custom-music {
+  color: #ca9ee6;
+  border-radius: 5px;
+}
+
+#custom-lock {
+  color: #babbf1;
+}
+
+#custom-power {
+  margin-right: 1rem;
+  border-radius: 0px 5px 5px 0px;
+  color: #e78284;
+}
+
+#custom-docker.docker {
+  color: #85c1dc;
+}
+
+#custom-docker.docker-none {
+  color: #737994;
+}
+
+#custom-docker.docker-error {
+  color: #e78284;
+}
+
+#custom-weather.clear {
+  color: #e5c890; /* Sunny yellow */
+}
+
+#custom-weather.cloud {
+  color: #99d1db; /* Light blue */
+}
+
+#custom-weather.rain {
+  color: #8caaee; /* Blue */
+}
+
+#custom-weather.snow {
+  color: #c6d0f5; /* White-ish */
+}
+
+#custom-weather.thunder {
+  color: #ca9ee6; /* Purple */
+}
+
+#custom-weather.fog {
+  color: #b0b4bc; /* Gray */
+}
+
+#custom-weather.error {
+  color: #e78284; /* Red */
 }

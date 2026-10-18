@@ -1,0 +1,42 @@
+#!/bin/sh
+# luksarchy-run — restart wrapper for the Luksarchy installer.
+# Run this to (re)start the installer at any time:
+#   luksarchy-run
+
+LOG=/tmp/luksarchy-install.log
+
+# The installer owns tty1 as a full-screen console TUI. Start immediately;
+# do not wait for graphical.target — the live ISO has no display manager.
+while true; do
+    clear
+    /usr/local/bin/luksarchy
+    EXIT=$?
+
+    # Exit code 0 means installation finished successfully — don't loop.
+    if [ "$EXIT" -eq 0 ]; then
+        exit 0
+    fi
+
+    # Non-zero: installer crashed or was cancelled.
+    printf '\n\033[1;31mInstaller exited with code %d.\033[0m\n' "$EXIT"
+    [ -f "$LOG" ] && printf '\033[90mLog: %s\033[0m\n' "$LOG"
+    printf '\n\033[1mOptions:\033[0m\n'
+    printf '  r  Restart installer\n'
+    printf '  s  Drop to shell\n'
+    printf '  q  Power off\n'
+    printf '\nChoice [r/s/q]: '
+
+    # Read one char without waiting for Enter.
+    old=$(stty -g)
+    stty raw -echo
+    choice=$(dd bs=1 count=1 2>/dev/null)
+    stty "$old"
+    printf '\n'
+
+    case "$choice" in
+        r|R) continue ;;
+        s|S) exec /bin/bash --login ;;
+        q|Q) poweroff ;;
+        *)   continue ;;
+    esac
+done

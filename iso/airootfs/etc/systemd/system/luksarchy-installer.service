@@ -1,0 +1,19 @@
+[Unit]
+Description=Luksarchy Installer
+After=systemd-user-sessions.service
+Before=display-manager.service
+Conflicts=display-manager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/luksarchy-run
+StandardInput=tty-force
+StandardOutput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=no
+Restart=no
+User=root
+
+[Install]
+WantedBy=multi-user.target
